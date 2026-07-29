@@ -6,14 +6,14 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.os.Handler
+import android.os.Looper
 import android.util.Log
-import androidx.core.content.ContextCompat.getSystemService
 
 class ScanNearbyDevices {
 
     private var isScanning = false
-    private var handler: Handler = Handler()
-    private lateinit var runnable: Runnable
+    private val handler: Handler = Handler(Looper.getMainLooper())
+    private var runnable: Runnable? = null
 
     companion object {
         private var instance: ScanNearbyDevices? = null
@@ -32,14 +32,14 @@ class ScanNearbyDevices {
     // Function to start scanning for nearby Bluetooth devices
     fun startScanning(context: Context, callback: (List<BluetoothDeviceInfo>) -> Unit) {
         val bluetoothManager: BluetoothManager? =
-            getSystemService(context, BluetoothManager::class.java)
+            context.getSystemService(BluetoothManager::class.java)
         val bluetoothAdapter: BluetoothAdapter? = bluetoothManager?.adapter
 
         if (bluetoothAdapter?.isEnabled == true && !isScanning) {
             isScanning = true
 
             // Create a runnable to scan every second
-            runnable = object : Runnable {
+            val scanRunnable = object : Runnable {
                 @SuppressLint("MissingPermission")
                 override fun run() {
                     Log.d("ScanNearbyDevices", "Scanning for nearby devices...")
@@ -63,9 +63,10 @@ class ScanNearbyDevices {
                     handler.postDelayed(this, 1000)
                 }
             }
+            runnable = scanRunnable
 
             // Start the periodic scanning
-            handler.post(runnable)
+            handler.post(scanRunnable)
         } else {
             Log.e("ScanNearbyDevices", "Bluetooth is disabled or already scanning.")
         }
@@ -75,14 +76,16 @@ class ScanNearbyDevices {
     fun stopScanning() {
         if (isScanning) {
             isScanning = false
-            handler.removeCallbacks(runnable) // Stop the periodic scanning
+            runnable?.let { handler.removeCallbacks(it) } // Stop the periodic scanning
         }
     }
 
     fun resumeScanning() {
-        if (!isScanning) {
+        // Only resume if a scan was previously configured; otherwise there is nothing to post.
+        val pending = runnable
+        if (!isScanning && pending != null) {
             isScanning = true
-            handler.post(runnable)
+            handler.post(pending)
         }
     }
 }

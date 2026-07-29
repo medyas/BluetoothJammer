@@ -224,6 +224,12 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         scanner.stopScanning()
+        // Unregister the receiver to avoid leaking it; guard against it not being registered.
+        try {
+            unregisterReceiver(receiver)
+        } catch (e: IllegalArgumentException) {
+            // Receiver was not registered; ignore.
+        }
     }
 
     // Stop scanning when change to another intent
