@@ -23,13 +23,13 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import api.BluetoothDeviceInfo
 import api.ScanNearbyDevices
-import java.util.Date
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var listView: ListView
     private lateinit var deviceListAdapter: ArrayAdapter<String>
-    private lateinit var devices: List<BluetoothDeviceInfo>
+    private val deviceNames = mutableListOf<String>()
+    private var currentDevices: List<BluetoothDeviceInfo> = emptyList()
     private val scanner = ScanNearbyDevices.getInstance()
 
     companion object {
@@ -51,13 +51,12 @@ class MainActivity : AppCompatActivity() {
         }
         startActivityForResult(discoverableIntent, requestCode)
 
-        // Register for broadcasts when a device is discovered.
-        var filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+        // Register for device-found and discovery-finished broadcasts.
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
         registerReceiver(receiver, filter)
-
-        // Register for broadcasts when discovery has finished
-        filter = IntentFilter(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
-        this.registerReceiver(receiver, filter)
     }
 
     private fun checkBluetoothStatusAndPermissions() {
@@ -77,26 +76,18 @@ class MainActivity : AppCompatActivity() {
 
         @SuppressLint("MissingPermission")
         override fun onReceive(context: Context, intent: Intent) {
-            // Initialize the ListView and Adapter
-            val action: String? = intent.action
-            Log.d("MainActivity", "Action: $action")
-            println("Action: $action")
-            if (BluetoothDevice.ACTION_FOUND == action) {
-                // Discovery has found a device. Get the BluetoothDevice
-                Log.d("MainActivity", "Device Found")
-                println("Device Found")
-                val device: BluetoothDevice? =
-                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
-                val deviceInfo = BluetoothDeviceInfo(
-                    name = device?.name ?: "Unknown Device",
-                    address = device?.address ?: "00:00:00:00"
-                )
+            when (intent.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device: BluetoothDevice? =
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    Log.d("MainActivity", "Device found: ${device?.address}")
+                    scanner.onDeviceDiscovered(device?.name, device?.address)
+                }
 
-                // Print toast message if new device found
-                Toast.makeText(this@MainActivity, "FOUND NEW DEVICE!\n\nName: ${deviceInfo.name}\nAddress: ${deviceInfo.address}\n\n${Date()}", Toast.LENGTH_SHORT).show()
-
-                // Add the device to the list and notify the adapter
-                ScanNearbyDevices.devicesList.add(deviceInfo)
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
+                    Log.d("MainActivity", "Discovery finished; restarting")
+                    scanner.onDiscoveryFinished()
+                }
             }
         }
     }
@@ -171,20 +162,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startScanningForDevices() {
+        // Set up a single stable adapter and update its data as devices arrive.
+        deviceListAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, deviceNames)
+        listView.adapter = deviceListAdapter
+        listView.setOnItemClickListener { _, _, position, _ ->
+            currentDevices.getOrNull(position)?.let { showDeviceInfo(it) }
+        }
+
         // Start scanning for nearby Bluetooth devices
         scanner.startScanning(this) { discoveredDevices ->
-            devices = discoveredDevices
-            val deviceNames = devices.map { "${it.name} (${it.address})" }
-
-            // Set up ArrayAdapter to show the list of devices
-            deviceListAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, deviceNames)
-            listView.adapter = deviceListAdapter
-
-            // Handle item click events
-            listView.setOnItemClickListener { _, _, position, _ ->
-                val selectedDevice = devices[position]
-                showDeviceInfo(selectedDevice)
-            }
+            currentDevices = discoveredDevices
+            deviceNames.clear()
+            deviceNames.addAll(discoveredDevices.map { "${it.name} (${it.address})" })
+            deviceListAdapter.notifyDataSetChanged()
         }
     }
 
