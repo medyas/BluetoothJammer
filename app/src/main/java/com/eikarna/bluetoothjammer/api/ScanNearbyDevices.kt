@@ -56,6 +56,9 @@ class ScanNearbyDevices {
         onUpdate = callback
         isScanning = true
 
+        // Drop results from any previous scan session so the list can't show stale devices.
+        devicesMap.clear()
+
         // Seed the list with bonded (paired) devices.
         adapter.bondedDevices?.forEach { device ->
             addDevice(device.name ?: "Unknown Device", device.address)

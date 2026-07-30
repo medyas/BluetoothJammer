@@ -1,3 +1,30 @@
 <resources>
     <string name="app_name">Bluetooth Jammer</string>
+
+    <!-- Main screen -->
+    <string name="manual_target_hint">Target address (e.g. 00:11:22:AA:BB:CC)</string>
+    <string name="manual_target_button">Target</string>
+    <string name="invalid_address">Enter a valid Bluetooth MAC address</string>
+    <string name="nearby_devices_header">Nearby &amp; paired devices (tap to select)</string>
+    <string name="bluetooth_required">Bluetooth must be enabled to scan for devices</string>
+    <string name="permissions_required">Permissions are required to scan for Bluetooth devices</string>
+
+    <!-- Device info dialog -->
+    <string name="device_info_title">Device Info</string>
+    <string name="action_attack">Attack</string>
+    <string name="action_close">Close</string>
+    <string name="action_copy_info">Copy Info</string>
+    <string name="info_copied">Device info copied to clipboard</string>
+
+    <!-- Attack screen -->
+    <string name="start">Start</string>
+    <string name="stop">Stop</string>
+    <string name="logging_enabled">Logging enabled — this may reduce performance.</string>
+    <string name="logging_disabled">Logging disabled.</string>
+
+    <!-- Responsible-use gate -->
+    <string name="disclaimer_title">Authorized testing only</string>
+    <string name="disclaimer_message">This tool floods a Bluetooth device with connection traffic and will disrupt it. Only use it against devices you own or are explicitly authorized to test, in a controlled environment. Unauthorized use may be illegal.</string>
+    <string name="disclaimer_agree">I understand</string>
+    <string name="disclaimer_exit">Exit</string>
 </resources>
