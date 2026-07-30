@@ -7,54 +7,45 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Discovers nearby Bluetooth devices.
+ * Discovers nearby Bluetooth devices for one owner (a ViewModel), exposing the running,
+ * de-duplicated result set as a [StateFlow].
  *
- * Previously this only polled the bonded (paired) device set every second and
- * cleared the list on each tick, so devices reported by the ACTION_FOUND
- * broadcast were wiped and true discovery was never started. It now seeds the
- * list with bonded devices, starts an actual discovery scan, keeps results
- * de-duplicated by address, and restarts discovery when it finishes.
+ * This is a plain instance — no singleton, no `static` device map — so its state lives and dies
+ * with its owner rather than the process. It seeds the list with bonded (paired) devices, starts
+ * a discovery scan, de-duplicates by address, and restarts discovery when a scan finishes.
  */
 class ScanNearbyDevices {
 
     private var isScanning = false
+    private var configured = false
     private val handler: Handler = Handler(Looper.getMainLooper())
     private var bluetoothAdapter: BluetoothAdapter? = null
-    private var onUpdate: ((List<BluetoothDeviceInfo>) -> Unit)? = null
 
-    companion object {
-        private var instance: ScanNearbyDevices? = null
+    // Ordered and de-duplicated by device address; instance state, not static.
+    private val devicesMap = LinkedHashMap<String, BluetoothDeviceInfo>()
 
-        // Singleton pattern to ensure only one instance exists
-        fun getInstance(): ScanNearbyDevices {
-            if (instance == null) {
-                instance = ScanNearbyDevices()
-            }
-            return instance!!
-        }
+    private val _devices = MutableStateFlow<List<BluetoothDeviceInfo>>(emptyList())
+    val devices: StateFlow<List<BluetoothDeviceInfo>> = _devices.asStateFlow()
 
-        // Ordered and de-duplicated by device address.
-        val devicesMap = LinkedHashMap<String, BluetoothDeviceInfo>()
-    }
-
-    private val TAG = "ScanNearbyDevices"
+    private val tag = "ScanNearbyDevices"
 
     @SuppressLint("MissingPermission")
-    fun startScanning(context: Context, callback: (List<BluetoothDeviceInfo>) -> Unit) {
-        val bluetoothManager: BluetoothManager? =
-            context.getSystemService(BluetoothManager::class.java)
-        val adapter = bluetoothManager?.adapter
+    fun startScanning(context: Context) {
+        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
         bluetoothAdapter = adapter
 
         if (adapter == null || !adapter.isEnabled) {
-            Log.e(TAG, "Bluetooth is disabled or unavailable.")
+            Log.e(tag, "Bluetooth is disabled or unavailable.")
             return
         }
 
-        onUpdate = callback
         isScanning = true
+        configured = true
 
         // Drop results from any previous scan session so the list can't show stale devices.
         devicesMap.clear()
@@ -87,9 +78,8 @@ class ScanNearbyDevices {
     }
 
     /**
-     * Called from the activity's ACTION_DISCOVERY_FINISHED broadcast receiver.
-     * Discovery stops itself after roughly 12 seconds, so restart it to keep
-     * finding devices while the screen is open.
+     * Called from the activity's ACTION_DISCOVERY_FINISHED broadcast receiver. Discovery stops
+     * itself after ~12 seconds, so restart it to keep finding devices while the screen is open.
      */
     fun onDiscoveryFinished() {
         if (!isScanning) return
@@ -104,7 +94,7 @@ class ScanNearbyDevices {
     }
 
     private fun emit() {
-        onUpdate?.invoke(devicesMap.values.toList())
+        _devices.value = devicesMap.values.toList()
     }
 
     @SuppressLint("MissingPermission")
@@ -115,13 +105,13 @@ class ScanNearbyDevices {
         try {
             bluetoothAdapter?.cancelDiscovery()
         } catch (e: SecurityException) {
-            Log.e(TAG, "Missing permission to cancel discovery", e)
+            Log.e(tag, "Missing permission to cancel discovery", e)
         }
     }
 
     fun resumeScanning() {
         // Only resume if a scan was previously configured.
-        if (!isScanning && onUpdate != null) {
+        if (!isScanning && configured) {
             isScanning = true
             emit()
             beginDiscovery()
@@ -131,5 +121,5 @@ class ScanNearbyDevices {
 
 data class BluetoothDeviceInfo(
     val name: String,
-    val address: String
+    val address: String,
 )

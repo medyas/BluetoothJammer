@@ -1,9 +1,10 @@
 # BluetoothJammer (WIP)
-Jam/DoS your neighbour's bluetooth speaker/devices for peace!
+A tool for testing a Bluetooth device's resilience to RFCOMM connection flooding, in a
+controlled environment.
 
-> **Educational / authorized-testing use only.** Only use this against devices
-> you own or are explicitly authorized to test. Interfering with others'
-> devices may be illegal in your jurisdiction.
+> **Authorized testing only.** Only use this against devices you own or are explicitly
+> authorized to test, in a controlled environment. Interfering with devices you don't own
+> may be illegal in your jurisdiction.
 
 # Preview
 <table style="padding:10px">
@@ -30,7 +31,13 @@ To build locally instead:
 ```
 
 ### Toolchain
-Gradle 8.11.1 · AGP 8.7.3 · Kotlin 2.1.0 · compileSdk/targetSdk 35 · minSdk 24
+Gradle 8.11.1 · AGP 8.7.3 · Kotlin 2.3.20 · compileSdk/targetSdk 35 · minSdk 29
+
+### Architecture
+`MainActivity`/`AttackActivity` are thin views over `MainViewModel`/`AttackViewModel`, so an
+on-screen attack run survives configuration changes (e.g. rotation). The attack engine
+(`api.AttackEngine`) talks to an `RfcommConnection` seam rather than `BluetoothSocket`
+directly, which keeps its worker/retry/stop/stats logic unit-testable off-device.
 
 # TODO
 - [X] Material UI

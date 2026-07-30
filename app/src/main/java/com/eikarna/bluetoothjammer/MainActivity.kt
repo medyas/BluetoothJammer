@@ -18,14 +18,18 @@ import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.ListView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import api.BluetoothDeviceInfo
+import kotlinx.coroutines.launch
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
-import api.BluetoothDeviceInfo
-import api.ScanNearbyDevices
 import util.BluetoothAddress
 
 class MainActivity : AppCompatActivity() {
@@ -36,11 +40,30 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceListAdapter: ArrayAdapter<String>
     private val deviceNames = mutableListOf<String>()
     private var currentDevices: List<BluetoothDeviceInfo> = emptyList()
-    private val scanner = ScanNearbyDevices.getInstance()
     private var receiverRegistered = false
 
+    private val viewModel: MainViewModel by viewModels()
+
+    // ActivityResult launchers (registered before the activity starts).
+    private val enableBluetoothLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (bluetoothAdapter()?.isEnabled == true) {
+                checkPermissionsAndStartScanning()
+            } else {
+                Toast.makeText(this, R.string.bluetooth_required, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+    private val permissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            if (results.values.all { it }) {
+                viewModel.startScanning()
+            } else {
+                Toast.makeText(this, R.string.permissions_required, Toast.LENGTH_SHORT).show()
+            }
+        }
+
     companion object {
-        private const val PERMISSION_REQUEST_CODE = 101
         private const val PREFS = "bt_jammer_prefs"
         private const val KEY_DISCLAIMER_ACCEPTED = "disclaimer_accepted"
         private const val DEFAULT_THREADS = 8
@@ -54,13 +77,36 @@ class MainActivity : AppCompatActivity() {
         editTextTarget = findViewById(R.id.editTextTarget)
         buttonManualTarget = findViewById(R.id.buttonManualTarget)
 
+        setupDeviceList()
         setupManualTargetEntry()
+        observeDevices()
 
         // Require an explicit authorized-use acknowledgement before doing anything with Bluetooth.
         if (hasAcceptedDisclaimer()) {
             startBluetoothFlow()
         } else {
             showDisclaimer()
+        }
+    }
+
+    private fun setupDeviceList() {
+        deviceListAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, deviceNames)
+        listView.adapter = deviceListAdapter
+        listView.setOnItemClickListener { _, _, position, _ ->
+            currentDevices.getOrNull(position)?.let { showDeviceInfo(it) }
+        }
+    }
+
+    private fun observeDevices() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.devices.collect { devices ->
+                    currentDevices = devices
+                    deviceNames.clear()
+                    deviceNames.addAll(devices.map { "${it.name} (${it.address})" })
+                    deviceListAdapter.notifyDataSetChanged()
+                }
+            }
         }
     }
 
@@ -123,11 +169,13 @@ class MainActivity : AppCompatActivity() {
         receiverRegistered = true
     }
 
+    private fun bluetoothAdapter(): BluetoothAdapter? =
+        getSystemService(BluetoothManager::class.java)?.adapter
+
     private fun checkBluetoothStatusAndPermissions() {
-        val bluetoothManager: BluetoothManager = getSystemService(BluetoothManager::class.java)
-        val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
-            showBluetoothDisabledDialog()
+        val adapter = bluetoothAdapter()
+        if (adapter == null || !adapter.isEnabled) {
+            enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
         } else {
             checkPermissionsAndStartScanning()
         }
@@ -135,19 +183,18 @@ class MainActivity : AppCompatActivity() {
 
     // Create a BroadcastReceiver for ACTION_FOUND.
     private val receiver = object : BroadcastReceiver() {
-
         @SuppressLint("MissingPermission")
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 BluetoothDevice.ACTION_FOUND -> {
                     val device = intent.bluetoothDevice()
                     Log.d("MainActivity", "Device found: ${device?.address}")
-                    scanner.onDeviceDiscovered(device?.name, device?.address)
+                    viewModel.onDeviceDiscovered(device?.name, device?.address)
                 }
 
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
                     Log.d("MainActivity", "Discovery finished; restarting")
-                    scanner.onDiscoveryFinished()
+                    viewModel.onDiscoveryFinished()
                 }
             }
         }
@@ -160,12 +207,6 @@ class MainActivity : AppCompatActivity() {
         } else {
             getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
         }
-
-    @SuppressLint("MissingPermission")
-    private fun showBluetoothDisabledDialog() {
-        val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-        startActivityForResult(enableBtIntent, 1)
-    }
 
     private fun checkPermissionsAndStartScanning() {
         val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -183,46 +224,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (hasPermissions(permissions)) {
-            startScanningForDevices()
+            viewModel.startScanning()
         } else {
-            ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
-        }
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                startScanningForDevices()
-            } else {
-                Toast.makeText(this, R.string.permissions_required, Toast.LENGTH_SHORT).show()
-            }
+            permissionsLauncher.launch(permissions)
         }
     }
 
     private fun hasPermissions(permissions: Array<String>): Boolean {
         return permissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
-    }
-
-    private fun startScanningForDevices() {
-        // Set up a single stable adapter and update its data as devices arrive.
-        deviceListAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, deviceNames)
-        listView.adapter = deviceListAdapter
-        listView.setOnItemClickListener { _, _, position, _ ->
-            currentDevices.getOrNull(position)?.let { showDeviceInfo(it) }
-        }
-
-        scanner.startScanning(this) { discoveredDevices ->
-            currentDevices = discoveredDevices
-            deviceNames.clear()
-            deviceNames.addAll(discoveredDevices.map { "${it.name} (${it.address})" })
-            deviceListAdapter.notifyDataSetChanged()
         }
     }
 
@@ -249,7 +259,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchAttack(name: String, address: String) {
-        scanner.stopScanning()
+        viewModel.stopScanning()
         val intent = Intent(this, AttackActivity::class.java).apply {
             putExtra("DEVICE_NAME", name)
             putExtra("ADDRESS", address)
@@ -260,7 +270,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        scanner.stopScanning()
+        viewModel.stopScanning()
         if (receiverRegistered) {
             try {
                 unregisterReceiver(receiver)
@@ -273,11 +283,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        scanner.stopScanning()
+        viewModel.stopScanning()
     }
 
     override fun onResume() {
         super.onResume()
-        scanner.resumeScanning()
+        viewModel.resumeScanning()
     }
 }
