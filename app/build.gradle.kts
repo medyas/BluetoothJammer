@@ -9,10 +9,12 @@ android {
 
     defaultConfig {
         applicationId = "com.eikarna.bluetoothjammer"
-        minSdk = 24
+        // The attack path is annotated @RequiresApi(Q) and the log view uses API-29 text APIs,
+        // so 24 was a latent crash on Android 7-9. 29 makes the floor honest.
+        minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

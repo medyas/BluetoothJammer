@@ -14,6 +14,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.inputmethod.EditorInfo
 import android.widget.ArrayAdapter
 import android.widget.ListView
 import android.widget.Toast
@@ -21,19 +22,28 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.textfield.TextInputEditText
 import api.BluetoothDeviceInfo
 import api.ScanNearbyDevices
+import util.BluetoothAddress
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var listView: ListView
+    private lateinit var editTextTarget: TextInputEditText
+    private lateinit var buttonManualTarget: MaterialButton
     private lateinit var deviceListAdapter: ArrayAdapter<String>
     private val deviceNames = mutableListOf<String>()
     private var currentDevices: List<BluetoothDeviceInfo> = emptyList()
     private val scanner = ScanNearbyDevices.getInstance()
+    private var receiverRegistered = false
 
     companion object {
         private const val PERMISSION_REQUEST_CODE = 101
+        private const val PREFS = "bt_jammer_prefs"
+        private const val KEY_DISCLAIMER_ACCEPTED = "disclaimer_accepted"
+        private const val DEFAULT_THREADS = 8
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,32 +51,84 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         listView = findViewById(R.id.deviceListView)
+        editTextTarget = findViewById(R.id.editTextTarget)
+        buttonManualTarget = findViewById(R.id.buttonManualTarget)
 
-        // Check and request necessary permissions
-        checkBluetoothStatusAndPermissions()
+        setupManualTargetEntry()
 
-        val requestCode = 1;
-        val discoverableIntent: Intent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
-            putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 1200)
+        // Require an explicit authorized-use acknowledgement before doing anything with Bluetooth.
+        if (hasAcceptedDisclaimer()) {
+            startBluetoothFlow()
+        } else {
+            showDisclaimer()
         }
-        startActivityForResult(discoverableIntent, requestCode)
+    }
 
-        // Register for device-found and discovery-finished broadcasts.
+    private fun setupManualTargetEntry() {
+        buttonManualTarget.setOnClickListener { submitManualTarget() }
+        editTextTarget.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_GO) {
+                submitManualTarget()
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private fun submitManualTarget() {
+        val normalized = BluetoothAddress.normalize(editTextTarget.text?.toString())
+        if (normalized == null) {
+            Toast.makeText(this, R.string.invalid_address, Toast.LENGTH_SHORT).show()
+            return
+        }
+        launchAttack(getString(R.string.manual_target_button), normalized)
+    }
+
+    // ---- Responsible-use gate ---------------------------------------------------------------
+
+    private fun hasAcceptedDisclaimer(): Boolean =
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_DISCLAIMER_ACCEPTED, false)
+
+    private fun showDisclaimer() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.disclaimer_title)
+            .setMessage(R.string.disclaimer_message)
+            .setCancelable(false)
+            .setPositiveButton(R.string.disclaimer_agree) { dialog, _ ->
+                getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putBoolean(KEY_DISCLAIMER_ACCEPTED, true).apply()
+                dialog.dismiss()
+                startBluetoothFlow()
+            }
+            .setNegativeButton(R.string.disclaimer_exit) { _, _ -> finish() }
+            .show()
+    }
+
+    // ---- Bluetooth setup --------------------------------------------------------------------
+
+    private fun startBluetoothFlow() {
+        registerDiscoveryReceiver()
+        checkBluetoothStatusAndPermissions()
+    }
+
+    private fun registerDiscoveryReceiver() {
+        if (receiverRegistered) return
         val filter = IntentFilter().apply {
             addAction(BluetoothDevice.ACTION_FOUND)
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
         }
-        registerReceiver(receiver, filter)
+        // Android 14 (targetSdk 35) requires an explicit export flag; these are system broadcasts.
+        ContextCompat.registerReceiver(this, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
+        receiverRegistered = true
     }
 
     private fun checkBluetoothStatusAndPermissions() {
         val bluetoothManager: BluetoothManager = getSystemService(BluetoothManager::class.java)
         val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
         if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
-            // Bluetooth is either not supported or not enabled, show dialog
             showBluetoothDisabledDialog()
         } else {
-            // Bluetooth is enabled, proceed with permission checks
             checkPermissionsAndStartScanning()
         }
     }
@@ -78,8 +140,7 @@ class MainActivity : AppCompatActivity() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 BluetoothDevice.ACTION_FOUND -> {
-                    val device: BluetoothDevice? =
-                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    val device = intent.bluetoothDevice()
                     Log.d("MainActivity", "Device found: ${device?.address}")
                     scanner.onDeviceDiscovered(device?.name, device?.address)
                 }
@@ -92,6 +153,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun Intent.bluetoothDevice(): BluetoothDevice? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+        }
+
     @SuppressLint("MissingPermission")
     private fun showBluetoothDisabledDialog() {
         val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
@@ -99,38 +168,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkPermissionsAndStartScanning() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // For Android 12 and higher, request specific Bluetooth permissions
-            val permissions = arrayOf(
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
                 Manifest.permission.BLUETOOTH_CONNECT,
                 Manifest.permission.ACCESS_FINE_LOCATION
             )
-
-            if (!hasPermissions(permissions)) {
-                ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
-            } else {
-                // Permissions already granted, start scanning
-                startScanningForDevices()
-            }
         } else {
-            // For older Android versions, request Bluetooth and location permissions
-            val permissions = arrayOf(
+            arrayOf(
                 Manifest.permission.BLUETOOTH,
                 Manifest.permission.BLUETOOTH_ADMIN,
                 Manifest.permission.ACCESS_FINE_LOCATION
             )
+        }
 
-            if (!hasPermissions(permissions)) {
-                ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
-            } else {
-                // Permissions already granted, start scanning
-                startScanningForDevices()
-            }
+        if (hasPermissions(permissions)) {
+            startScanningForDevices()
+        } else {
+            ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
         }
     }
 
-    // Handle the permission request result
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<String>,
@@ -139,25 +197,16 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST_CODE) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                // All permissions were granted
                 startScanningForDevices()
             } else {
-                // Permission denied, show a message
-                Toast.makeText(
-                    this,
-                    "Permissions are required to scan for Bluetooth devices",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(this, R.string.permissions_required, Toast.LENGTH_SHORT).show()
             }
         }
     }
 
     private fun hasPermissions(permissions: Array<String>): Boolean {
         return permissions.all {
-            ContextCompat.checkSelfPermission(
-                this,
-                it
-            ) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
     }
 
@@ -169,7 +218,6 @@ class MainActivity : AppCompatActivity() {
             currentDevices.getOrNull(position)?.let { showDeviceInfo(it) }
         }
 
-        // Start scanning for nearby Bluetooth devices
         scanner.startScanning(this) { discoveredDevices ->
             currentDevices = discoveredDevices
             deviceNames.clear()
@@ -180,55 +228,54 @@ class MainActivity : AppCompatActivity() {
 
     // Show device details in a dialog
     private fun showDeviceInfo(device: BluetoothDeviceInfo) {
-        val message =
-            "Name: ${device.name}\nAddress: ${device.address}"
+        val message = "Name: ${device.name}\nAddress: ${device.address}"
 
-        val dialogBuilder = AlertDialog.Builder(this)
-        dialogBuilder.setTitle("Device Info")
+        AlertDialog.Builder(this)
+            .setTitle(R.string.device_info_title)
             .setMessage(message)
-            .setPositiveButton("Attack") { dialog, _ ->
+            .setPositiveButton(R.string.action_attack) { dialog, _ ->
                 dialog.dismiss()
-                scanner.stopScanning()
-                val intent = Intent(this, AttackActivity::class.java).apply {
-                    putExtra("DEVICE_NAME", device.name)
-                    putExtra("ADDRESS", device.address)
-                    putExtra("THREADS", 8)
-                }
-
-                // Start AttackActivity
-                startActivity(intent)
+                launchAttack(device.name, device.address)
             }
-            .setNegativeButton("Close") { dialog, _ ->
-                dialog.dismiss()
-            }
-            .setNeutralButton("Copy Info") { _, _ ->
+            .setNegativeButton(R.string.action_close) { dialog, _ -> dialog.dismiss() }
+            .setNeutralButton(R.string.action_copy_info) { _, _ ->
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 val clip = android.content.ClipData.newPlainText("Device Info", message)
                 clipboard.setPrimaryClip(clip)
-                Toast.makeText(this, "Device info copied to clipboard", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, R.string.info_copied, Toast.LENGTH_SHORT).show()
             }
-        dialogBuilder.create().show()
+            .create()
+            .show()
     }
 
-    // Stop scanning when the activity is destroyed
+    private fun launchAttack(name: String, address: String) {
+        scanner.stopScanning()
+        val intent = Intent(this, AttackActivity::class.java).apply {
+            putExtra("DEVICE_NAME", name)
+            putExtra("ADDRESS", address)
+            putExtra("THREADS", DEFAULT_THREADS)
+        }
+        startActivity(intent)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         scanner.stopScanning()
-        // Unregister the receiver to avoid leaking it; guard against it not being registered.
-        try {
-            unregisterReceiver(receiver)
-        } catch (e: IllegalArgumentException) {
-            // Receiver was not registered; ignore.
+        if (receiverRegistered) {
+            try {
+                unregisterReceiver(receiver)
+            } catch (e: IllegalArgumentException) {
+                // Receiver was not registered; ignore.
+            }
+            receiverRegistered = false
         }
     }
 
-    // Stop scanning when change to another intent
     override fun onPause() {
         super.onPause()
         scanner.stopScanning()
     }
 
-    // Resume scanning
     override fun onResume() {
         super.onResume()
         scanner.resumeScanning()

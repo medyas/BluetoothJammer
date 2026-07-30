@@ -41,7 +41,7 @@ class AttackActivity : AppCompatActivity() {
         @JvmStatic
         @Volatile
         var isAttacking = false
-        var FrameworkVersion = 1.0
+        const val FrameworkVersion = "1.1"
 
         @Volatile
         var loggingStatus = true
@@ -99,10 +99,10 @@ class AttackActivity : AppCompatActivity() {
         switchLog.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
                 loggingStatus = true
-                Toast.makeText(this@AttackActivity, "Logging Enabled! You may degrade performance issue.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@AttackActivity, R.string.logging_enabled, Toast.LENGTH_LONG).show()
             } else {
                 loggingStatus = false
-                Toast.makeText(this@AttackActivity, "Logging Disabled!", Toast.LENGTH_LONG).show()
+                Toast.makeText(this@AttackActivity, R.string.logging_disabled, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -114,7 +114,7 @@ class AttackActivity : AppCompatActivity() {
     @SuppressLint("MissingPermission")
     private fun startAttack() {
         isAttacking = true
-        buttonStartStop.text = "Stop"
+        buttonStartStop.text = getString(R.string.stop)
         bluetoothAdapter()?.cancelDiscovery()
         Logger.appendLog(logAttack, "Attack Started! Address: $address ($deviceName) | Threads: $threads")
         Toast.makeText(this@AttackActivity, "Attack started with $threads thread(s).", Toast.LENGTH_SHORT).show()
@@ -124,7 +124,7 @@ class AttackActivity : AppCompatActivity() {
     @SuppressLint("MissingPermission")
     private fun stopAttack() {
         isAttacking = false
-        buttonStartStop.text = "Start"
+        buttonStartStop.text = getString(R.string.start)
         attack.stopAttack()
         Logger.appendLog(logAttack, "Attack Stopped!")
         bluetoothAdapter()?.startDiscovery()
