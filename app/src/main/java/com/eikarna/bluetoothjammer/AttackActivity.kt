@@ -1,19 +1,16 @@
 package com.eikarna.bluetoothjammer
 
-import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
 import android.graphics.text.LineBreaker
 import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.text.isDigitsOnly
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import api.AttackEngine
 import api.AttackEvent
 import api.AttackStats
 import com.google.android.material.button.MaterialButton
@@ -38,11 +35,10 @@ class AttackActivity : AppCompatActivity() {
     private lateinit var address: String
     private var threads: Int = 1
 
-    private lateinit var engine: AttackEngine
-    private var attacking = false
+    private val viewModel: AttackViewModel by viewModels()
 
     companion object {
-        const val FrameworkVersion = "1.1"
+        const val FrameworkVersion = "1.2"
 
         // UI concern: whether per-connection log lines are rendered. The engine always emits
         // them; the switch just decides whether we show them.
@@ -59,7 +55,7 @@ class AttackActivity : AppCompatActivity() {
         deviceName = intent.getStringExtra("DEVICE_NAME") ?: "Unknown Device"
         address = intent.getStringExtra("ADDRESS") ?: "Unknown Address"
         threads = intent.getIntExtra("THREADS", 1)
-        engine = AttackEngine(address)
+        viewModel.initialize(address)
 
         viewDeviceName = findViewById(R.id.textViewDeviceName)
         viewDeviceAddress = findViewById(R.id.textViewAddress)
@@ -74,10 +70,10 @@ class AttackActivity : AppCompatActivity() {
         viewThreads.setText("$threads")
         logAttack.justificationMode = LineBreaker.JUSTIFICATION_MODE_INTER_WORD
         Logger.appendLog(logAttack, "Bluetooth Jammer Framework Version: $FrameworkVersion")
-        renderStats(AttackStats())
+        renderStats(viewModel.stats.value)
 
         buttonStartStop.setOnClickListener {
-            if (attacking) stopAttack() else startAttack()
+            if (viewModel.isRunning) stopAttack() else startAttack()
         }
 
         viewThreads.doAfterTextChanged { str ->
@@ -102,8 +98,8 @@ class AttackActivity : AppCompatActivity() {
     private fun observeEngine() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                launch { engine.stats.collect { renderStats(it) } }
-                launch { engine.events.collect { onEvent(it) } }
+                launch { viewModel.stats.collect { renderStats(it) } }
+                launch { viewModel.events.collect { onEvent(it) } }
             }
         }
     }
@@ -119,6 +115,8 @@ class AttackActivity : AppCompatActivity() {
             stats.elapsedMillis / 1000,
             Format.humanBytes(stats.bytesPerSecond),
         )
+        // Keep the button label in sync with the actual run state (covers rotation).
+        buttonStartStop.text = getString(if (stats.running) R.string.stop else R.string.start)
     }
 
     private fun onEvent(event: AttackEvent) {
@@ -144,49 +142,17 @@ class AttackActivity : AppCompatActivity() {
         }
     }
 
-    private fun bluetoothAdapter(): BluetoothAdapter? =
-        getSystemService(BluetoothManager::class.java)?.adapter
-
-    @SuppressLint("MissingPermission")
     private fun startAttack() {
-        val device = try {
-            bluetoothAdapter()?.getRemoteDevice(address)
-        } catch (e: IllegalArgumentException) {
-            null
-        }
-        if (device == null) {
+        if (!viewModel.start(threads)) {
             Toast.makeText(this, R.string.invalid_target_device, Toast.LENGTH_SHORT).show()
             return
         }
-
-        attacking = true
         buttonStartStop.text = getString(R.string.stop)
-        bluetoothAdapter()?.cancelDiscovery()
         Toast.makeText(this, "Attack started with $threads thread(s).", Toast.LENGTH_SHORT).show()
-        engine.start(device, threads)
     }
 
-    @SuppressLint("MissingPermission")
     private fun stopAttack() {
-        attacking = false
         buttonStartStop.text = getString(R.string.start)
-        lifecycleScope.launch {
-            engine.stopAndJoin()
-            bluetoothAdapter()?.startDiscovery()
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        if (attacking) {
-            attacking = false
-            buttonStartStop.text = getString(R.string.start)
-            engine.cancel()
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        engine.cancel()
+        viewModel.stop()
     }
 }
