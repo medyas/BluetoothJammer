@@ -12,10 +12,15 @@
 #   public *;
 #}
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Preserve line numbers for readable release crash traces, and hide the original file name.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# --- App-specific keeps -------------------------------------------------------------------
+# Activities/ViewModels are instantiated reflectively by the framework; keep their entry points.
+-keep public class * extends android.app.Activity
+-keep public class * extends androidx.lifecycle.ViewModel { <init>(...); }
+
+# Kotlin coroutines and AndroidX/Material ship their own consumer ProGuard rules, so no manual
+# keeps are needed for them. Nothing in this app uses reflection or serialization beyond the
+# framework entry points above.
