@@ -21,6 +21,11 @@
     <string name="stop">Stop</string>
     <string name="logging_enabled">Logging enabled — this may reduce performance.</string>
     <string name="logging_disabled">Logging disabled.</string>
+    <string name="invalid_target_device">Invalid target device address.</string>
+    <string name="attack_started_fmt">Attack started → %1$s | workers: %2$d</string>
+    <string name="attack_stopped">Attack stopped.</string>
+    <!-- workers, attempts, ok, fail, sent, seconds, throughput -->
+    <string name="attack_stats_fmt">workers %1$d · attempts %2$d · ok %3$d · fail %4$d\nsent %5$s in %6$ds (%7$s/s)</string>
 
     <!-- Responsible-use gate -->
     <string name="disclaimer_title">Authorized testing only</string>
